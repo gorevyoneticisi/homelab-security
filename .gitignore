@@ -1,0 +1,6 @@
+backups/
+*.bak
+*.log
+.env
+.env.*
+security-report-*.txt
