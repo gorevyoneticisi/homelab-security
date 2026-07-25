@@ -120,6 +120,16 @@ Docker network isolation checker. Reports:
 
 Generates a detailed text compliance report covering all 11 security categories. Saves to reports/compliance-TIMESTAMP.txt. Suitable for audit trails or attaching to support tickets.
 
+### setup-smart-blocking.sh
+
+One-click setup for smart IP blocking system:
+
+- Installs CrowdSec rate-limit scenarios
+- Creates smart IP classifier (runs every 30 min)
+- Creates AI scraper blocker (runs every 6 hours)
+- Installs cron jobs
+- Configures ban thresholds by IP type
+
 ### restore.sh
 
 Rollback script. Lists available backups and restores:
@@ -168,6 +178,42 @@ This suite is designed for homelabs running behind CGNAT (Carrier-Grade NAT) on 
 Traffic flows: Internet -> VPS (public IP) -> WireGuard tunnel -> Homelab (private network)
 
 The VPS is the actual attack surface. The harden-vps.sh script specifically targets VPS security. The homelab itself is protected by being behind the CGNAT and WireGuard tunnel.
+
+## Smart IP Blocking (New)
+
+Intelligent IP classification and banning system that combines CrowdSec rate-limiting with IP intelligence.
+
+### Features
+
+- **CrowdSec Rate-Limiting**: Custom scenarios for 10+ req/60s and 5+ req/30s detection
+- **Smart IP Classifier**: Uses ip-api.com to classify IPs as datacenter/proxy/residential
+- **AI Scraper Blocker**: Blocks known AI bots (GPTBot, CCBot, Bytespider, etc.)
+- **Automated Banning**: Different thresholds for different IP types
+
+### Ban Thresholds
+
+| IP Type | Violations Before Ban | Ban Duration |
+|---------|----------------------|--------------|
+| Residential | 10 | 1 hour |
+| Datacenter | 5 | 24 hours |
+| Proxy/VPN | 3 | 24 hours |
+| Known bad | 1 | 24 hours |
+
+### Setup
+
+```bash
+sudo bash scripts/setup-smart-blocking.sh
+```
+
+### Documentation
+
+Detailed guides for each security layer:
+
+- [Cloudflare WAF Setup](docs/01-cloudflare-waf-setup.md)
+- [CrowdSec Rate-Limiting](docs/02-crowdsec-rate-limiting.md)
+- [Smart IP Blocking](docs/03-smart-ip-blocking.md)
+- [Firewall Service Restriction](docs/04-firewall-service-restriction.md)
+- [Security Layers Overview](docs/05-security-layers-overview.md)
 
 ## License
 
