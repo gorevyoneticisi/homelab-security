@@ -1,6 +1,15 @@
-# Homelab Security Suite
+# Homelab Security Toolkit
 
-A set of bash scripts for hardening Docker-based homelabs. Designed for systems behind CGNAT with a VPS reverse proxy.
+An opinionated set of Bash scripts for auditing and hardening Docker-based
+homelabs behind CGNAT and a VPS reverse proxy.
+
+> [!CAUTION]
+> The audit scripts are safe to run without applying changes, but the hardening,
+> firewall, SSH, and VPN scripts modify the host. Keep console access available,
+> review the generated backups, and test on a non-production system first.
+
+This project is a practical administration toolkit, not a replacement for a
+formal vulnerability assessment or a compliance certification.
 
 ## Architecture
 
@@ -19,6 +28,11 @@ Internet -> VPS (public IP) -> WireGuard -> Homelab (CGNAT)
 ```bash
 git clone https://github.com/gorevyoneticisi/homelab-security.git
 cd homelab-security
+
+# Start with the read-only scored audit
+sudo bash scripts/scan-only.sh
+
+# Open the interactive audit/hardening menu when ready
 sudo bash setup.sh
 ```
 
@@ -30,7 +44,8 @@ Main menu with 10 options. Entry point for all tools.
 
 ### security-scan.sh
 
-Comprehensive read-only security scanner. Checks 13 categories and assigns severity levels:
+Interactive security audit. The scan phase is read-only, checks 13 categories,
+and assigns severity levels:
 
 - Network exposure (public ports, VPN status)
 - Firewall rules (UFW, iptables)
@@ -46,7 +61,9 @@ Comprehensive read-only security scanner. Checks 13 categories and assigns sever
 - Docker network isolation
 - SSL/TLS certificate status
 
-Outputs findings as CRITICAL, HIGH, MEDIUM, or LOW. Labels each finding as auto-patchable or requiring manual action. Asks the user what to fix.
+Outputs findings as CRITICAL, HIGH, MEDIUM, or LOW and labels each finding as
+auto-patchable or requiring manual action. After displaying the report, it can
+optionally hand off to `hardening.sh`; choosing exit makes no changes.
 
 ### scan.sh
 
