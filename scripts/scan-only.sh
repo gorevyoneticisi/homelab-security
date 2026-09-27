@@ -9,13 +9,24 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CY
 
 SCORE=0
 MAX=100
+CHECKS=0   # number of pass/warn/fail checks actually run (info/detail excluded)
 
-pass()  { echo -e "  ${GREEN}[OK]${NC} $1"; SCORE=$((SCORE + 10)); }
-warn()  { echo -e "  ${YELLOW}!${NC} $1"; SCORE=$((SCORE + 5)); }
-fail()  { echo -e "  ${RED}[FAIL]${NC} $1"; }
+# Each check awards up to 10 points. CHECKS is what makes the score a
+# real percentage instead of an unbounded sum that can exceed MAX.
+pass()  { echo -e "  ${GREEN}[OK]${NC} $1"; SCORE=$((SCORE + 10)); CHECKS=$((CHECKS + 1)); }
+warn()  { echo -e "  ${YELLOW}!${NC} $1";  SCORE=$((SCORE + 5));  CHECKS=$((CHECKS + 1)); }
+fail()  { echo -e "  ${RED}[FAIL]${NC} $1";                        CHECKS=$((CHECKS + 1)); }
 info()  { echo -e "  ${BLUE}i${NC} $1"; }
 detail(){ echo -e "    ${CYAN}->${NC} $1"; }
 header(){ echo -e "\n${BOLD}${BLUE}=== $1 ===${NC}"; }
+
+# Scanners read UFW state and sshd -T drop-ins, both root-only. Fail fast
+# with a clear message rather than dying part-way through with no score.
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${YELLOW}[!]${NC} Run with sudo for full results:  sudo bash scripts/scan-only.sh"
+    echo -e "    ${CYAN}(some checks need root: ufw status, sshd -T)${NC}"
+    echo ""
+fi
 
 echo ""
 echo -e "${BOLD}+==========================================================+${NC}"
@@ -50,7 +61,7 @@ else
 fi
 
 # Check for public-facing ports
-EXPOSED=$(ss -tlnp 2>/dev/null | grep "0.0.0.0" | wc -l)
+EXPOSED=$(ss -tlnp 2>/dev/null | grep "0.0.0.0" | wc -l) || true
 if [[ $EXPOSED -gt 10 ]]; then
     warn "$EXPOSED services listening on all interfaces (0.0.0.0)"
     detail "Each is a potential attack surface from the internet"
@@ -76,7 +87,9 @@ fi
 header "2. FIREWALL STATUS"
 
 if command -v ufw &>/dev/null; then
-    status=$(ufw status 2>/dev/null | head -1)
+    # `ufw status` needs root; without `|| true` pipefail + set -e abort the
+    # whole scan here when run unprivileged.
+    status=$(ufw status 2>/dev/null | head -1) || true
     if [[ "$status" == *"active"* ]]; then
         pass "UFW firewall is active"
         detail "Rules: $(ufw status | grep -c "ALLOW") allow, $(ufw status | grep -c "DENY") deny"
@@ -92,12 +105,32 @@ fi
 # -- SSH ------------------------------------------------------
 header "3. SSH CONFIGURATION"
 
+# Resolve an EFFECTIVE sshd setting.
+# sshd's first-match-wins semantics + `Include sshd_config.d/*.conf` at line 24
+# mean the main file alone is not authoritative. `sshd -T` applies it all.
+# Falls back to walking drop-ins then the main file when sshd -T is
+# unavailable (needs root to read the drop-ins).
+#   sshd_opt <key> [default]   key is lowercase, as in `sshd -T` output
+sshd_opt() {
+    local key="$1" def="${2-not set}" val="" f
+    if command -v sshd >/dev/null 2>&1; then
+        val=$(sshd -T 2>/dev/null | awk -v k="$key" 'tolower($1)==k{print $2; exit}') || true
+        [[ -n "$val" ]] && { printf '%s\n' "$val"; return 0; }
+    fi
+    for f in /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config; do
+        [[ -f "$f" ]] || continue
+        val=$(grep -iE "^[[:space:]]*${key}[[:space:]]+" "$f" 2>/dev/null | head -1 | awk '{print $2}') || true
+        [[ -n "$val" ]] && { printf '%s\n' "$val"; return 0; }
+    done
+    printf '%s\n' "$def"
+}
+
 SSHD="/etc/ssh/sshd_config"
 if [[ -f "$SSHD" ]]; then
-    port=$(grep "^Port " "$SSHD" | awk '{print $2}' || echo "22")
-    root=$(grep "^PermitRootLogin" "$SSHD" | awk '{print $2}' || echo "not set")
-    pw=$(grep "^PasswordAuthentication" "$SSHD" | awk '{print $2}' || echo "not set")
-    tries=$(grep "^MaxAuthTries" "$SSHD" | awk '{print $2}' || echo "not set")
+    port=$(sshd_opt port 22)
+    root=$(sshd_opt permitrootlogin)
+    pw=$(sshd_opt passwordauthentication)
+    tries=$(sshd_opt maxauthtries)
 
     detail "Port: $port"
     detail "Root login: $root"
@@ -135,7 +168,7 @@ done
 # -- Docker Security ------------------------------------------
 header "5. DOCKER SECURITY"
 
-CONTAINERS=$(docker ps -q 2>/dev/null | wc -l)
+CONTAINERS=$(docker ps -q 2>/dev/null | wc -l) || true
 detail "Running containers: $CONTAINERS"
 
 if [[ -n "${DOCKER_CONTENT_TRUST:-}" ]]; then
@@ -147,8 +180,10 @@ fi
 
 # Check privileged containers
 PRIV=$(docker ps --format '{{.Names}}' 2>/dev/null | while read c; do
-    docker inspect "$c" --format '{{.HostConfig.Privileged}}' 2>/dev/null | grep -q true && echo "$c"
-done)
+    if docker inspect "$c" --format '{{.HostConfig.Privileged}}' 2>/dev/null | grep -q true; then
+        echo "$c"
+    fi
+done || true)
 if [[ -z "$PRIV" ]]; then
     pass "No privileged containers"
 else
@@ -158,9 +193,11 @@ fi
 
 # Check init:true
 NO_INIT=$(docker ps --format '{{.Names}}' 2>/dev/null | while read c; do
-    init=$(docker inspect "$c" --format '{{.HostConfig.Init}}' 2>/dev/null)
-    [[ "$init" != "true" ]] && echo "$c"
-done | head -5)
+    init=$(docker inspect "$c" --format '{{.HostConfig.Init}}' 2>/dev/null) || true
+    if [[ "$init" != "true" ]]; then
+        echo "$c"
+    fi
+done | head -5 || true)
 if [[ -z "$NO_INIT" ]]; then
     pass "All containers have init:true"
 else
@@ -203,11 +240,25 @@ docker ps --format '{{.Names}}' 2>/dev/null | grep -qi "duplicati" && pass "Back
 
 # -- Score ----------------------------------------------------
 header "SECURITY SCORE"
+
+# Score is a real percentage: points earned vs points available.
+# CHECKS*10 = the maximum these checks could have awarded, so the
+# result is always 0..MAX and can never exceed 100.
+if [[ $CHECKS -gt 0 ]]; then
+    SCORE=$(( (SCORE * MAX) / (CHECKS * 10) ))
+else
+    SCORE=0
+fi
+if [[ $SCORE -gt $MAX ]]; then
+    SCORE=$MAX
+fi
+
 echo ""
-echo -e "  ${BOLD}Score: $SCORE / 100${NC}"
+echo -e "  ${BOLD}Score: $SCORE / $MAX${NC}"
+echo -e "  ${CYAN}(${CHECKS} checks run)${NC}"
 echo ""
 
-if [[ $SCORE -ge 80 ]]; then
+if [[ $SCORE -ge 90 ]]; then
     echo -e "  ${GREEN}${BOLD}EXCELLENT${NC} - Your system is well-secured"
 elif [[ $SCORE -ge 60 ]]; then
     echo -e "  ${YELLOW}${BOLD}GOOD${NC} - Some improvements recommended"
@@ -218,5 +269,9 @@ else
 fi
 
 echo ""
-echo -e "  ${CYAN}To fix issues:${NC} sudo bash scripts/hardening.sh"
+echo -e "  ${CYAN}Next:${NC} review each [FAIL]/! above and fix them manually."
+echo -e "  ${YELLOW}Note:${NC} scripts/hardening.sh targets CasaOS + a VPS/WireGuard"
+echo -e "        layout. On THIS box it resets UFW to allow 80/443/51820"
+echo -e "        worldwide and sets AllowUsers to accounts that do not exist"
+echo -e "        here - do not run it unreviewed."
 echo ""

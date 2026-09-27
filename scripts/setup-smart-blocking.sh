@@ -102,7 +102,7 @@ mkdir -p /var/lib/smart-ip-classifier
 echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] Smart classifier running" >> "$LOG"
 
 # Get IPs from CrowdSec alerts
-ALERTS=$(cscli alerts list --limit 100 --format json 2>/dev/null | jq -r '.[].source_ip' 2>/dev/null | sort -u)
+ALERTS=$(cscli alerts list --limit 100 --format json 2>/dev/null | jq -r '.[].source_ip' 2>/dev/null | sort -u) || true
 
 for ip in $ALERTS; do
     # Skip private IPs
@@ -111,10 +111,10 @@ for ip in $ALERTS; do
     fi
     
     # Check if already classified
-    EXISTING=$(jq -r ".[\"$ip\"]" "$CLASSIFIED" 2>/dev/null)
+    EXISTING=$(jq -r ".[\"$ip\"]" "$CLASSIFIED" 2>/dev/null) || true
     if [ "$EXISTING" != "null" ] && [ -n "$EXISTING" ]; then
-        CLASS=$(jq -r ".[\"$ip\"].class" "$CLASSIFIED" 2>/dev/null)
-        VIOLATION_COUNT=$(jq -r ".[\"$ip\"].violations // 0" "$VIOLATIONS" 2>/dev/null)
+        CLASS=$(jq -r ".[\"$ip\"].class" "$CLASSIFIED" 2>/dev/null) || true
+        VIOLATION_COUNT=$(jq -r ".[\"$ip\"].violations // 0" "$VIOLATIONS" 2>/dev/null) || true
         VIOLATION_COUNT=$((VIOLATION_COUNT + 1))
         jq ".[\"$ip\"].violations = $VIOLATION_COUNT" "$VIOLATIONS" > /tmp/v-tmp && mv /tmp/v-tmp "$VIOLATIONS"
         
@@ -145,13 +145,13 @@ for ip in $ALERTS; do
     fi
     
     # New IP - classify it
-    GEO=$(curl -s --max-time 5 "http://ip-api.com/json/$ip?fields=status,isp,org,as,hosting,proxy" 2>/dev/null)
-    STATUS=$(echo "$GEO" | jq -r '.status' 2>/dev/null)
+    GEO=$(curl -s --max-time 5 "http://ip-api.com/json/$ip?fields=status,isp,org,as,hosting,proxy" 2>/dev/null) || true
+    STATUS=$(echo "$GEO" | jq -r '.status' 2>/dev/null) || true
     
     if [ "$STATUS" = "success" ]; then
-        HOSTING=$(echo "$GEO" | jq -r '.hosting' 2>/dev/null)
-        PROXY=$(echo "$GEO" | jq -r '.proxy' 2>/dev/null)
-        ORG=$(echo "$GEO" | jq -r '.org' 2>/dev/null)
+        HOSTING=$(echo "$GEO" | jq -r '.hosting' 2>/dev/null) || true
+        PROXY=$(echo "$GEO" | jq -r '.proxy' 2>/dev/null) || true
+        ORG=$(echo "$GEO" | jq -r '.org' 2>/dev/null) || true
         
         if [ "$HOSTING" = "true" ] || [ "$PROXY" = "true" ]; then
             if [ "$PROXY" = "true" ]; then
@@ -214,9 +214,9 @@ docker logs nginx-proxy-manager --since 6h 2>/dev/null | \
       continue
     fi
     
-    GEO=$(curl -s --max-time 5 "http://ip-api.com/json/$ip?fields=status,isp,org,hosting" 2>/dev/null)
-    HOSTING=$(echo "$GEO" | jq -r '.hosting' 2>/dev/null)
-    ORG=$(echo "$GEO" | jq -r '.org' 2>/dev/null)
+    GEO=$(curl -s --max-time 5 "http://ip-api.com/json/$ip?fields=status,isp,org,hosting" 2>/dev/null) || true
+    HOSTING=$(echo "$GEO" | jq -r '.hosting' 2>/dev/null) || true
+    ORG=$(echo "$GEO" | jq -r '.org' 2>/dev/null) || true
     
     if [ "$HOSTING" = "true" ]; then
       echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] BANNED AI scraper: $ip ($ORG)" >> "$LOG"

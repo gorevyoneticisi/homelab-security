@@ -205,7 +205,7 @@ log "AIDE initialized (run 'aide --check' weekly)"
 # -- 8. Docker Container Hardening ---------------------------
 info "Hardening Docker containers..."
 
-COMPOSE_FILES=$(find /var/lib/casaos/apps/*/docker-compose.yml 2>/dev/null)
+COMPOSE_FILES=$(find /var/lib/casaos/apps/*/docker-compose.yml 2>/dev/null) || true
 HARDENED=0
 
 for f in $COMPOSE_FILES; do

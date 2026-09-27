@@ -17,11 +17,11 @@ echo -e "${BOLD}Container Network Membership:${NC}"
 echo ""
 
 docker ps --format '{{.Names}}' 2>/dev/null | while read container; do
-    networks=$(docker inspect "$container" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)
-    ports=$(docker inspect "$container" --format '{{range $k, $v := .NetworkSettings.Ports}}{{$k}} {{end}}' 2>/dev/null)
-    privileged=$(docker inspect "$container" --format '{{.HostConfig.Privileged}}' 2>/dev/null)
-    init=$(docker inspect "$container" --format '{{.HostConfig.Init}}' 2>/dev/null)
-    user=$(docker inspect "$container" --format '{{.Config.User}}' 2>/dev/null)
+    networks=$(docker inspect "$container" --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null) || true
+    ports=$(docker inspect "$container" --format '{{range $k, $v := .NetworkSettings.Ports}}{{$k}} {{end}}' 2>/dev/null) || true
+    privileged=$(docker inspect "$container" --format '{{.HostConfig.Privileged}}' 2>/dev/null) || true
+    init=$(docker inspect "$container" --format '{{.HostConfig.Init}}' 2>/dev/null) || true
+    user=$(docker inspect "$container" --format '{{.Config.User}}' 2>/dev/null) || true
 
     echo -e "  ${BLUE}$container${NC}"
     echo -e "    Networks: $networks"
@@ -50,7 +50,7 @@ echo -e "${BOLD}Network Isolation Analysis:${NC}"
 echo ""
 
 docker network ls --format '{{.Name}}' 2>/dev/null | grep -v "^bridge$\|^host$\|^none$" | while read net; do
-    containers=$(docker network inspect "$net" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null)
+    containers=$(docker network inspect "$net" --format '{{range .Containers}}{{.Name}} {{end}}' 2>/dev/null) || true
     count=$(echo "$containers" | wc -w)
 
     if [[ $count -gt 1 ]]; then

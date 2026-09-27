@@ -16,7 +16,9 @@ declare -a SUGGESTIONS=()
 CRIT=0; HIGH=0; MED=0; LOW=0; PASS=0
 
 add_finding() {
-    local severity="$1" auto="$2" msg="$3" detail="$4"
+    # $4 (detail) is optional - callers at lines ~122 and ~191 pass only
+    # three args, and `set -u` would otherwise abort on `$4`.
+    local severity="$1" auto="$2" msg="$3" detail="${4-}"
     FINDINGS+=("[$severity] $msg|$detail|$auto")
     case $severity in
         CRIT) CRIT=$((CRIT+1));;
@@ -32,6 +34,11 @@ add_pass() {
     PASS=$((PASS+1))
 }
 
+# Defined here, NOT below its first use: calling an undefined `info` makes
+# bash fall through to the GNU `info` manual reader, which errors out
+# ("No menu item ... in node '(dir)Top'") and set -e aborts the scan.
+info() { echo -e "  ${BLUE}[i]${NC} $1"; }
+
 echo ""
 echo -e "${BOLD}+==========================================================+${NC}"
 echo -e "${BOLD}|         Security Scanner v4.0                    |\033[0m"
@@ -41,8 +48,6 @@ echo ""
 info "Scanning your entire system... (this is safe, nothing will be changed)"
 echo ""
 
-info() { echo -e "  ${BLUE}[i]${NC} $1"; }
-
 # ===========================================================
 # PHASE 1: SCAN EVERYTHING
 # ===========================================================
@@ -51,7 +56,7 @@ echo -e "\n${BOLD}${MAGENTA}=== PHASE 1: SCANNING ===${NC}"
 
 # -- Network --
 info "Scanning network exposure..."
-PUB_PORTS=$(ss -tlnp 2>/dev/null | grep "0.0.0.0" | awk '{print $4}' | grep -oP ':\K[0-9]+' | sort -n | uniq)
+PUB_PORTS=$(ss -tlnp 2>/dev/null | grep "0.0.0.0" | awk '{print $4}' | grep -oP ':\K[0-9]+' | sort -n | uniq) || true
 DANGER="21 23 25 135 139 445 3389 5900"
 for p in $DANGER; do
     if ss -tlnp 2>/dev/null | grep -q ":$p "; then
@@ -79,11 +84,31 @@ fi
 
 # -- SSH --
 info "Scanning SSH..."
+# Resolve an EFFECTIVE sshd setting.
+# sshd's first-match-wins semantics + `Include sshd_config.d/*.conf` at line 24
+# mean the main file alone is not authoritative. `sshd -T` applies it all.
+# Falls back to walking drop-ins then the main file when sshd -T is
+# unavailable (needs root to read the drop-ins).
+#   sshd_opt <key> [default]   key is lowercase, as in `sshd -T` output
+sshd_opt() {
+    local key="$1" def="${2-not set}" val="" f
+    if command -v sshd >/dev/null 2>&1; then
+        val=$(sshd -T 2>/dev/null | awk -v k="$key" 'tolower($1)==k{print $2; exit}') || true
+        [[ -n "$val" ]] && { printf '%s\n' "$val"; return 0; }
+    fi
+    for f in /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config; do
+        [[ -f "$f" ]] || continue
+        val=$(grep -iE "^[[:space:]]*${key}[[:space:]]+" "$f" 2>/dev/null | head -1 | awk '{print $2}') || true
+        [[ -n "$val" ]] && { printf '%s\n' "$val"; return 0; }
+    done
+    printf '%s\n' "$def"
+}
+
 SSHD="/etc/ssh/sshd_config"
 if [[ -f "$SSHD" ]]; then
-    port=$(grep "^Port " "$SSHD" | awk '{print $2}' || echo "22")
-    root=$(grep "^PermitRootLogin" "$SSHD" | awk '{print $2}' || echo "not set")
-    pw=$(grep "^PasswordAuthentication" "$SSHD" | awk '{print $2}' || echo "not set")
+    port=$(sshd_opt port 22)
+    root=$(sshd_opt permitrootlogin)
+    pw=$(sshd_opt passwordauthentication)
 
     [[ "$port" == "22" ]] && add_finding MED auto "SSH on default port 22" "Bot scanners constantly probe port 22"
     [[ "$root" != "no" && "$root" != "prohibit-password" ]] && add_finding CRIT auto "SSH root login enabled: $root" "Attackers can brute-force root directly"
@@ -105,23 +130,29 @@ done
 
 # -- Docker --
 info "Scanning Docker security..."
-CONTAINERS=$(docker ps -q 2>/dev/null | wc -l)
+CONTAINERS=$(docker ps -q 2>/dev/null | wc -l) || true
 
 PRIV=$(docker ps --format '{{.Names}}' 2>/dev/null | while read c; do
-    docker inspect "$c" --format '{{.HostConfig.Privileged}}' 2>/dev/null | grep -q true && echo "$c"
-done)
+    if docker inspect "$c" --format '{{.HostConfig.Privileged}}' 2>/dev/null | grep -q true; then
+        echo "$c"
+    fi
+done || true)
 [[ -z "$PRIV" ]] && add_pass "No privileged containers" || add_finding CRIT manual "Privileged containers: $PRIV" "Full host access from container"
 
 NO_INIT=$(docker ps --format '{{.Names}}' 2>/dev/null | while read c; do
-    init=$(docker inspect "$c" --format '{{.HostConfig.Init}}' 2>/dev/null)
-    [[ "$init" != "true" ]] && echo "$c"
-done)
+    init=$(docker inspect "$c" --format '{{.HostConfig.Init}}' 2>/dev/null) || true
+    if [[ "$init" != "true" ]]; then
+        echo "$c"
+    fi
+done || true)
 [[ -z "$NO_INIT" ]] && add_pass "All containers have init:true" || add_finding MED auto "Missing init:true: $NO_INIT" "Zombie processes accumulate"
 
 NO_NP=$(docker ps --format '{{.Names}}' 2>/dev/null | while read c; do
-    np=$(docker inspect "$c" --format '{{.HostConfig.SecurityOpt}}' 2>/dev/null)
-    [[ "$np" != *"no-new-privileges"* ]] && echo "$c"
-done)
+    np=$(docker inspect "$c" --format '{{.HostConfig.SecurityOpt}}' 2>/dev/null) || true
+    if [[ "$np" != *"no-new-privileges"* ]]; then
+        echo "$c"
+    fi
+done || true)
 [[ -z "$NO_NP" ]] && add_pass "All containers have no-new-privileges" || add_finding MED auto "Missing no-new-privileges: $NO_NP" "Processes can escalate privileges"
 
 # -- Kernel --
@@ -132,10 +163,15 @@ fi
 
 # -- Users --
 info "Scanning user accounts..."
-EMPTY_PW=$(awk -F: '($2 == "" || $2 == "!") {print $1}' /etc/shadow 2>/dev/null | wc -l)
+# Only $2 == "" is a real empty password (login with ANY password works).
+# $2 == "!" or "*" means the account is LOCKED / login-disabled - that is the
+# SECURE state, so counting it (as this check used to) reports locked system
+# daemons like syslog/uuidd as a CRITICAL finding. Verified: 0 real empty
+# passwords on this host, 4 locked daemons.
+EMPTY_PW=$(awk -F: '($2 == "") {print $1}' /etc/shadow 2>/dev/null | wc -l)
 [[ $EMPTY_PW -gt 0 ]] && add_finding CRIT auto "Empty passwords found: $EMPTY_PW user(s)" "Anyone can log in without password"
 
-FAILED=$(grep "Failed password" /var/log/auth.log 2>/dev/null | tail -100 | wc -l)
+FAILED=$(grep "Failed password" /var/log/auth.log 2>/dev/null | tail -100 | wc -l) || true
 [[ $FAILED -gt 50 ]] && add_finding HIGH manual "High failed logins: $FAILED" "Possible brute-force attack"
 
 # -- File Integrity --
@@ -153,12 +189,12 @@ systemctl is-active --quiet unattended-upgrades && add_pass "Auto-updates active
 
 # -- Cron --
 info "Scanning cron jobs..."
-SUSP=$(crontab -l 2>/dev/null | grep -i "curl\|wget\|nc\|netcat\|bash -i\|/dev/tcp" | wc -l)
+SUSP=$(crontab -l 2>/dev/null | grep -i "curl\|wget\|nc\|netcat\|bash -i\|/dev/tcp" | wc -l) || true
 [[ $SUSP -gt 0 ]] && add_finding CRIT manual "Suspicious cron jobs: $SUSP" "May indicate reverse shell" || add_pass "No suspicious cron jobs"
 
 # -- Network Isolation --
 info "Scanning Docker networks..."
-NET_COUNT=$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -v "^bridge$\|^host$\|^none$" | wc -l)
+NET_COUNT=$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -v "^bridge$\|^host$\|^none$" | wc -l) || true
 [[ $NET_COUNT -gt 5 ]] && add_pass "Good network isolation ($NET_COUNT networks)" || add_finding MED manual "Limited network isolation ($NET_COUNT networks)"
 
 # ===========================================================

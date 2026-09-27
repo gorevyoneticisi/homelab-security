@@ -41,7 +41,7 @@ echo ""
 read -p "Restore SSH config from backup? (y/N): " -n 1 -r
 echo ""
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    LATEST=$(ls -t "$BACKUP_DIR"/sshd_config*.bak 2>/dev/null | head -1)
+    LATEST=$(ls -t "$BACKUP_DIR"/sshd_config*.bak 2>/dev/null | head -1) || true
     if [[ -n "$LATEST" ]]; then
         cp "$LATEST" /etc/ssh/sshd_config
         systemctl restart sshd

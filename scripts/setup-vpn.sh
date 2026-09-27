@@ -65,7 +65,7 @@ SERVER_PUB=$(cat "$WG_DIR/server_public.key")
 info "Detecting network configuration..."
 
 # Get default interface
-DEFAULT_IF=$(ip route | awk '/default/ { print $5 }')
+DEFAULT_IF=$(ip route | awk '/default/ { print $5 }') || true
 info "Default interface: $DEFAULT_IF"
 
 # Get public IP
@@ -109,9 +109,9 @@ log "WireGuard started"
 # -- Generate client config ----------------------------------
 info "Generating client configuration..."
 
-CLIENT_PRIV=$(wg genkey)
-CLIENT_PUB=$(echo "$CLIENT_PRIV" | wg pubkey)
-CLIENT_PRESHARED=$(wg genpsk)
+CLIENT_PRIV=$(wg genkey) || true
+CLIENT_PUB=$(echo "$CLIENT_PRIV" | wg pubkey) || true
+CLIENT_PRESHARED=$(wg genpsk) || true
 
 cat > "$WG_DIR/client1.conf" << CLIENT
 [Interface]

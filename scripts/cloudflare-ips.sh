@@ -40,8 +40,8 @@ echo ""
 # -- Fetch Cloudflare IPs ------------------------------------
 info "Fetching Cloudflare IP ranges..."
 
-CF_IPV4=$(curl -s https://www.cloudflare.com/ips-v4 2>/dev/null)
-CF_IPV6=$(curl -s https://www.cloudflare.com/ips-v6 2>/dev/null)
+CF_IPV4=$(curl -s https://www.cloudflare.com/ips-v4 2>/dev/null) || true
+CF_IPV6=$(curl -s https://www.cloudflare.com/ips-v6 2>/dev/null) || true
 
 if [[ -z "$CF_IPV4" ]]; then
     err "Failed to fetch Cloudflare IPs. Check internet connection."
@@ -65,7 +65,7 @@ done
 info "Adding Cloudflare IPv4 rules..."
 
 while IFS= read -r ip; do
-    ip=$(echo "$ip" | tr -d '[:space:]')
+    ip=$(echo "$ip" | tr -d '[:space:]') || true
     [[ -z "$ip" ]] && continue
     ufw allow from "$ip" to any port 80 proto tcp comment "Cloudflare IPv4 HTTP"
     ufw allow from "$ip" to any port 443 proto tcp comment "Cloudflare IPv4 HTTPS"
@@ -78,7 +78,7 @@ if [[ -n "$CF_IPV6" ]]; then
     info "Adding Cloudflare IPv6 rules..."
 
     while IFS= read -r ip; do
-        ip=$(echo "$ip" | tr -d '[:space:]')
+        ip=$(echo "$ip" | tr -d '[:space:]') || true
         [[ -z "$ip" ]] && continue
         ufw allow from "$ip" to any port 80 proto tcp comment "Cloudflare IPv6 HTTP"
         ufw allow from "$ip" to any port 443 proto tcp comment "Cloudflare IPv6 HTTPS"
@@ -106,8 +106,8 @@ info "Creating Cloudflare IP auto-updater..."
 cat > /usr/local/bin/update-cloudflare-ips << 'UPDATER'
 #!/bin/bash
 # Auto-update Cloudflare IPs weekly
-CF_IPV4=$(curl -s https://www.cloudflare.com/ips-v4)
-CF_IPV6=$(curl -s https://www.cloudflare.com/ips-v6)
+CF_IPV4=$(curl -s https://www.cloudflare.com/ips-v4) || true
+CF_IPV6=$(curl -s https://www.cloudflare.com/ips-v6) || true
 
 if [[ -z "$CF_IPV4" ]]; then
     echo "Failed to fetch Cloudflare IPs" | logger -t cloudflare-ips
@@ -121,7 +121,7 @@ done
 
 # Add new IPv4 rules
 while IFS= read -r ip; do
-    ip=$(echo "$ip" | tr -d '[:space:]')
+    ip=$(echo "$ip" | tr -d '[:space:]') || true
     [[ -z "$ip" ]] && continue
     ufw allow from "$ip" to any port 80 proto tcp comment "Cloudflare IPv4 HTTP"
     ufw allow from "$ip" to any port 443 proto tcp comment "Cloudflare IPv4 HTTPS"
@@ -130,7 +130,7 @@ done <<< "$CF_IPV4"
 # Add new IPv6 rules
 if [[ -n "$CF_IPV6" ]]; then
     while IFS= read -r ip; do
-        ip=$(echo "$ip" | tr -d '[:space:]')
+        ip=$(echo "$ip" | tr -d '[:space:]') || true
         [[ -z "$ip" ]] && continue
         ufw allow from "$ip" to any port 80 proto tcp comment "Cloudflare IPv6 HTTP"
         ufw allow from "$ip" to any port 443 proto tcp comment "Cloudflare IPv6 HTTPS"

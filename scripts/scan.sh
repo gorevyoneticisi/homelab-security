@@ -43,7 +43,7 @@ else
 fi
 
 # Check for exposed Docker ports
-EXPOSED=$(docker ps --format '{{.Ports}}' 2>/dev/null | grep "0.0.0.0" | wc -l)
+EXPOSED=$(docker ps --format '{{.Ports}}' 2>/dev/null | grep "0.0.0.0" | wc -l) || true
 if [[ $EXPOSED -gt 5 ]]; then
     warn "$EXPOSED services exposed to the internet via Docker"
     tip "Each exposed port is an attack surface. Consider using a reverse proxy (Nginx Proxy Manager)."
@@ -74,7 +74,7 @@ fi
 header "2. FIREWALL"
 
 if command -v ufw &>/dev/null; then
-    status=$(ufw status 2>/dev/null | head -1)
+    status=$(ufw status 2>/dev/null | head -1) || true
     if [[ "$status" == *"active"* ]]; then
         pass "UFW is active"
         rules=$(ufw status | grep -c "ALLOW" || echo 0)
@@ -94,9 +94,29 @@ fi
 # -- 3. SSH Security -----------------------------------------
 header "3. SSH SECURITY"
 
+# Resolve an EFFECTIVE sshd setting.
+# sshd's first-match-wins semantics + `Include sshd_config.d/*.conf` at line 24
+# mean the main file alone is not authoritative. `sshd -T` applies it all.
+# Falls back to walking drop-ins then the main file when sshd -T is
+# unavailable (needs root to read the drop-ins).
+#   sshd_opt <key> [default]   key is lowercase, as in `sshd -T` output
+sshd_opt() {
+    local key="$1" def="${2-not set}" val="" f
+    if command -v sshd >/dev/null 2>&1; then
+        val=$(sshd -T 2>/dev/null | awk -v k="$key" 'tolower($1)==k{print $2; exit}') || true
+        [[ -n "$val" ]] && { printf '%s\n' "$val"; return 0; }
+    fi
+    for f in /etc/ssh/sshd_config.d/*.conf /etc/ssh/sshd_config; do
+        [[ -f "$f" ]] || continue
+        val=$(grep -iE "^[[:space:]]*${key}[[:space:]]+" "$f" 2>/dev/null | head -1 | awk '{print $2}') || true
+        [[ -n "$val" ]] && { printf '%s\n' "$val"; return 0; }
+    done
+    printf '%s\n' "$def"
+}
+
 SSHD="/etc/ssh/sshd_config"
 if [[ -f "$SSHD" ]]; then
-    root=$(grep "^PermitRootLogin" "$SSHD" | awk '{print $2}')
+    root=$(sshd_opt permitrootlogin)
     if [[ "$root" == "yes" ]]; then
         fail "SSH root login is ENABLED"
         tip "Risk: Attackers can brute-force the root account directly."
@@ -106,7 +126,7 @@ if [[ -f "$SSHD" ]]; then
         pass "SSH root login is disabled"
     fi
 
-    pw=$(grep "^PasswordAuthentication" "$SSHD" | awk '{print $2}')
+    pw=$(sshd_opt passwordauthentication)
     if [[ "$pw" == "yes" ]]; then
         fail "SSH password authentication is ENABLED"
         tip "Risk: Vulnerable to brute-force attacks."
@@ -116,7 +136,7 @@ if [[ -f "$SSHD" ]]; then
         pass "SSH uses key-only authentication"
     fi
 
-    port=$(grep "^Port " "$SSHD" | awk '{print $2}')
+    port=$(sshd_opt port 22)
     if [[ "$port" == "22" || -z "$port" ]]; then
         warn "SSH is on default port 22"
         tip "Bot scanners constantly probe port 22. Moving to a non-standard port reduces noise."
@@ -125,7 +145,7 @@ if [[ -f "$SSHD" ]]; then
         pass "SSH is on non-standard port $port"
     fi
 
-    tries=$(grep "^MaxAuthTries" "$SSHD" | awk '{print $2}')
+    tries=$(sshd_opt maxauthtries "")
     if [[ -z "$tries" || "$tries" -gt 3 ]]; then
         warn "SSH MaxAuthTries is not set or too high ($tries)"
         tip "Recommended: MaxAuthTries 3"
@@ -172,8 +192,10 @@ fi
 
 # Check for privileged containers
 priv=$(docker ps --format '{{.Names}}' 2>/dev/null | while read c; do
-    docker inspect "$c" --format '{{.HostConfig.Privileged}}' 2>/dev/null | grep -q true && echo "$c"
-done)
+    if docker inspect "$c" --format '{{.HostConfig.Privileged}}' 2>/dev/null | grep -q true; then
+        echo "$c"
+    fi
+done || true)
 if [[ -n "$priv" ]]; then
     fail "Privileged containers detected: $priv"
     tip "Privileged containers have full host access. Use cap_add instead."
@@ -184,9 +206,11 @@ fi
 
 # Check for init: true
 no_init=$(docker ps --format '{{.Names}}' 2>/dev/null | while read c; do
-    init=$(docker inspect "$c" --format '{{.HostConfig.Init}}' 2>/dev/null)
-    [[ "$init" != "true" ]] && echo "$c"
-done | head -5)
+    init=$(docker inspect "$c" --format '{{.HostConfig.Init}}' 2>/dev/null) || true
+    if [[ "$init" != "true" ]]; then
+        echo "$c"
+    fi
+done | head -5 || true)
 if [[ -n "$no_init" ]]; then
     warn "Containers missing init:true: $no_init"
     tip "Without init:true, zombie processes accumulate and never get reaped."
@@ -197,9 +221,11 @@ fi
 
 # Check for no-new-privileges
 no_np=$(docker ps --format '{{.Names}}' 2>/dev/null | while read c; do
-    np=$(docker inspect "$c" --format '{{.HostConfig.SecurityOpt}}' 2>/dev/null)
-    [[ "$np" != *"no-new-privileges"* ]] && echo "$c"
-done | head -5)
+    np=$(docker inspect "$c" --format '{{.HostConfig.SecurityOpt}}' 2>/dev/null) || true
+    if [[ "$np" != *"no-new-privileges"* ]]; then
+        echo "$c"
+    fi
+done | head -5 || true)
 if [[ -n "$no_np" ]]; then
     warn "Containers without no-new-privileges: $no_np"
     tip "Without this, processes inside containers can escalate privileges."
