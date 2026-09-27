@@ -197,6 +197,65 @@ info "Scanning Docker networks..."
 NET_COUNT=$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -v "^bridge$\|^host$\|^none$" | wc -l) || true
 [[ $NET_COUNT -gt 5 ]] && add_pass "Good network isolation ($NET_COUNT networks)" || add_finding MED manual "Limited network isolation ($NET_COUNT networks)"
 
+# -- Swap / memory --
+# Unencrypted disk swap is the security-relevant state: pages that hit
+# disk keep their plaintext contents, so secrets already cleared from
+# RAM can still be recovered from the swap file. zram stores everything
+# compressed in RAM and never writes to disk, which removes the exposure
+# outright. Marked manual because the right fix (zram vs. encrypting the
+# volume) is a policy choice, and scripts/hardening.sh does not touch swap.
+info "Scanning swap configuration..."
+
+# Swap may be a block device or a plain file. For a file the filesystem
+# it lives on is what matters, so resolve it first, then walk up the
+# device ancestry looking for a dm-crypt mapping. LUKS volumes report
+# TYPE=crypt from lsblk (verified against a throwaway LUKS loop device).
+#   swap_encrypted <path>   0 = encrypted, 1 = plaintext or unknown
+swap_encrypted() {
+    local node="$1" parent typ
+    if [[ ! -b "$node" ]]; then
+        node=$(findmnt -no SOURCE --target "$node" 2>/dev/null) || return 1
+    fi
+    node="${node%%\[*}"
+    while [[ -n "$node" && -b "$node" ]]; do
+        typ=$(lsblk -ndo TYPE "$node" 2>/dev/null | head -1) || true
+        [[ "$typ" == "crypt" ]] && return 0
+        parent=$(lsblk -ndo PKNAME "$node" 2>/dev/null | head -1) || true
+        [[ -z "$parent" ]] && break
+        node="/dev/$parent"
+    done
+    return 1
+}
+
+HAS_ZRAM=false
+CLEAR_SWAP=""
+SWAP_COUNT=0
+SWAP_LIST=$(swapon --show --noheadings 2>/dev/null) || true
+
+while IFS= read -r sw; do
+    [[ -z "$sw" ]] && continue
+    SWAP_COUNT=$((SWAP_COUNT + 1))
+    sdev=$(awk '{print $1}' <<< "$sw")
+    case "$sdev" in
+        *zram*) HAS_ZRAM=true ;;
+        *)  if ! swap_encrypted "$sdev"; then
+                CLEAR_SWAP="${CLEAR_SWAP:+$CLEAR_SWAP, }$sdev"
+            fi
+            ;;
+    esac
+done <<< "$SWAP_LIST"
+
+if [[ -n "$CLEAR_SWAP" ]]; then
+    add_finding MED manual "Unencrypted swap on disk: $CLEAR_SWAP" \
+        "Pages written to swap keep plaintext secrets on disk"
+elif [[ "$HAS_ZRAM" == true ]]; then
+    add_pass "Compressed RAM swap (zram) active"
+elif [[ $SWAP_COUNT -gt 0 ]]; then
+    add_pass "Swap on encrypted storage"
+else
+    info "No swap configured (valid choice, not flagged)"
+fi
+
 # ===========================================================
 # PHASE 2: SHOW ALL FINDINGS
 # ===========================================================

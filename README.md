@@ -59,7 +59,7 @@ and assigns severity levels:
 - Automatic security updates
 - Cron job analysis
 - Docker network isolation
-- SSL/TLS certificate status
+- Swap and memory (zram, plaintext swap on disk)
 
 Outputs findings as CRITICAL, HIGH, MEDIUM, or LOW and labels each finding as
 auto-patchable or requiring manual action. After displaying the report, it can

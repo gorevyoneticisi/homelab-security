@@ -290,6 +290,68 @@ header "9. MONITORING & BACKUP"
 docker ps --format '{{.Names}}' 2>/dev/null | grep -qi "uptime-kuma" && pass "Uptime monitoring: running" || warn "Uptime monitoring: not running"
 docker ps --format '{{.Names}}' 2>/dev/null | grep -qi "duplicati" && pass "Backup system: running" || warn "Backup system: not running"
 
+# -- 10. Memory & Swap ---------------------------------------
+header "10. MEMORY & SWAP"
+
+# Swap may be a block device or a plain file. For a file the filesystem
+# it lives on is what matters, so resolve it first, then walk up the
+# device ancestry looking for a dm-crypt mapping. LUKS volumes report
+# TYPE=crypt from lsblk (verified against a throwaway LUKS loop device).
+#   swap_encrypted <path>   0 = encrypted, 1 = plaintext or unknown
+swap_encrypted() {
+    local node="$1" parent typ
+    if [[ ! -b "$node" ]]; then
+        node=$(findmnt -no SOURCE --target "$node" 2>/dev/null) || return 1
+    fi
+    node="${node%%\[*}"
+    while [[ -n "$node" && -b "$node" ]]; do
+        typ=$(lsblk -ndo TYPE "$node" 2>/dev/null | head -1) || true
+        [[ "$typ" == "crypt" ]] && return 0
+        parent=$(lsblk -ndo PKNAME "$node" 2>/dev/null | head -1) || true
+        [[ -z "$parent" ]] && break
+        node="/dev/$parent"
+    done
+    return 1
+}
+
+HAS_ZRAM=false
+CLEAR_SWAP=""
+SWAP_COUNT=0
+SWAP_LIST=$(swapon --show --noheadings 2>/dev/null) || true
+
+while IFS= read -r sw; do
+    [[ -z "$sw" ]] && continue
+    SWAP_COUNT=$((SWAP_COUNT + 1))
+    sdev=$(awk '{print $1}' <<< "$sw")
+    info "  swap: $sw"
+    case "$sdev" in
+        *zram*) HAS_ZRAM=true ;;
+        *)  if ! swap_encrypted "$sdev"; then
+                CLEAR_SWAP="${CLEAR_SWAP:+$CLEAR_SWAP, }$sdev"
+            fi
+            ;;
+    esac
+done <<< "$SWAP_LIST"
+
+info "  swappiness: $(cat /proc/sys/vm/swappiness 2>/dev/null || echo n/a)"
+
+# Unencrypted swap is the one security-relevant state here: pages that
+# hit disk keep their plaintext contents, so secrets cleared from RAM
+# can still be recovered from the file. zram never leaves RAM at all.
+if [[ -n "$CLEAR_SWAP" ]]; then
+    fail "Swap on unencrypted disk: $CLEAR_SWAP"
+    tip "Risk: pages written to swap keep plaintext secrets on disk."
+    tip "Fix: use compressed RAM swap (zram) or encrypt the volume."
+    tip "zram: sudo apt install zram-tools  (RAM-backed, never hits disk)"
+    ISSUES=$((ISSUES + 1))
+elif [[ "$HAS_ZRAM" == true ]]; then
+    pass "Compressed RAM swap (zram) active, nothing stored on disk"
+elif [[ $SWAP_COUNT -gt 0 ]]; then
+    pass "Swap on encrypted storage"
+else
+    info "No swap configured"
+fi
+
 # -- Summary -------------------------------------------------
 echo ""
 echo -e "${BOLD}+==============================================+${NC}"
